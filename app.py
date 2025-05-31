@@ -1,9 +1,11 @@
 import streamlit as st
+import time
 import requests
 import random
 import json
-from openai import OpenAI
 import os
+from openai import RateLimitError
+from openai import OpenAI
 from datetime import datetime
 from PIL import Image
 import io
@@ -28,7 +30,7 @@ def save_posted_keyword(keyword):
 
 
 
-client = OpenAI(api_key = st.secrets["api_key"])
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
 
@@ -46,25 +48,52 @@ def generate_hashtags(keywords, count=20):
     all_tags = list(dict.fromkeys(base_tags + generic_tags))  # Remove duplicates
     return " ".join(all_tags[:count])  # Ensure minimum of 20
 
-def generate_dynamic_post(keywords):
-    prompt = f"""
-    Write a LinkedIn post of more than 150 words about: {', '.join(keywords)}.
-    The post should be informative, inspiring, and formatted like a human wrote it.
-    Include at least 20 relevant hashtags at the end.
-    Avoid em dashes (—) in the post.
+@st.cache_data(show_spinner=False)
+def generate_dynamic_post(keywords, max_retries=3, retry_delay=20):
     """
-    
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are a professional LinkedIn content writer."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.7,
-        max_tokens=600
+    Generate a LinkedIn post based on keywords with retry on rate limit.
+
+    Args:
+        keywords (list[str]): List of keywords.
+        max_retries (int): Number of retry attempts on rate limit.
+        retry_delay (int): Delay in seconds between retries.
+
+    Returns:
+        str: Generated post content or error message.
+    """
+    prompt = (
+        f"Write a LinkedIn post of more than 150 words about: {', '.join(keywords)}. "
+        "The post should be informative, inspiring, and formatted like a human wrote it. "
+        "Include at least 20 relevant hashtags at the end. Avoid em dashes (—) in the post."
     )
-    
-    return response.choices[0].message.content.strip()
+
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are a professional LinkedIn content writer."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.7,
+                max_tokens=600,
+                timeout=30,
+            )
+            return response.choices[0].message.content.strip()
+
+        except RateLimitError:
+            if attempt < max_retries - 1:
+                st.warning(f"Rate limit reached. Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                st.error("OpenAI API rate limit exceeded. Please try again later or check your quota.")
+                return "⚠️ Error: OpenAI quota exceeded. Please wait or upgrade your plan."
+
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {e}")
+            return "⚠️ Error generating post."
+
+    return "⚠️ Failed to generate post after multiple attempts."
 
 
 def linkedin_auth_url():
@@ -298,8 +327,10 @@ LINKEDIN_CLIENT_SECRET = "your_client_secret"
             
             # Generate preview
             if st.button("👀 Preview Post"):
-                generated_content = generate_dynamic_post(keywords)
-                st.session_state.preview_content = generated_content
+                with st.spinner("Generating your post..."):
+                    generated_content = generate_dynamic_post(keywords)
+                    st.session_state.preview_content = generated_content
+
             
             # Show preview
             if 'preview_content' in st.session_state:
