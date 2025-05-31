@@ -226,7 +226,7 @@ def main():
         layout="centered"
     )
     
-    st.title("🚀 Simple LinkedIn Poster")
+    st.title(" Simple LinkedIn Poster")
     st.markdown("*Keywords + Image → Humanized LinkedIn Post*")
     st.markdown("---")
     
